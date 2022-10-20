@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 
+import argparse
 import pathlib
 import sys
 import time
@@ -16,11 +17,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
-
-
-BROWSER_BINARY: Final[pathlib.Path] = pathlib.Path("F:\\Programs\\Mozilla Firefox\\firefox.exe").resolve()
-DRIVER_BINARY: Final[pathlib.Path] = pathlib.Path("geckodriver.exe").resolve()
-PAGE_LOAD_TIME: Final[int] = 1
 
 
 @unique
@@ -113,7 +109,7 @@ def browser_pdf_next_page(driver: webdriver.Firefox) -> None:
         raise ScanException(PDFScanError.PaginationError, f"Exception {exc} while moving to next page of PDF file")
 
 
-def run_interactive_cli():
+def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathlib.Path, page_load_time: int = 1):
     bottom_text: HTML = HTML("Press CTRL+C to exit")
     dst_directory: pathlib.Path = pathlib.Path()
     session_state: SessionState = SessionState.Start
@@ -136,7 +132,7 @@ def run_interactive_cli():
                 print_formatted_text(prompt_session.message)
                 prompt_session.prompt("Press ENTER to open browser...")
                 try:
-                    browser = browser_init_firefox(BROWSER_BINARY, DRIVER_BINARY)
+                    browser = browser_init_firefox(firefox_binary, geckodriver_binary)
                 except Exception as exc:
                     ret_code = PDFScanError.DriverError
                     session_state = SessionState.CloseSession
@@ -207,7 +203,7 @@ def run_interactive_cli():
                         try:
                             browser_pdf_scan_current_page(browser, save_as)
                             browser_pdf_next_page(browser)
-                            time.sleep(1)
+                            time.sleep(page_load_time)
                         except Exception as exc:
                             print_formatted_text(exc)
                             sys.exit(-3)
@@ -243,7 +239,40 @@ def run_interactive_cli():
 
 
 def main():
-    run_interactive_cli()
+    arg_parser = argparse.ArgumentParser()
+
+    arg_parser.add_argument(
+        "firefox_binary",
+        help="Path to Firefox executable",
+        type=pathlib.Path,
+    )
+
+    arg_parser.add_argument(
+        "geckodriver_binary",
+        help="Path to geckodriver executable",
+        type=pathlib.Path,
+    )
+
+    arg_parser.add_argument(
+        "-w", "--page_load_time",
+        help="time to wait (in seconds) for PDF page to load after it's scrolled into view",
+        type=int,
+        default=1
+    )
+
+    args = arg_parser.parse_args()
+
+    firefox_binary: pathlib.Path = args.firefox_binary
+    geckodriver_binary: pathlib.Path = args.geckodriver_binary
+    page_load_time: int = args.page_load_time
+
+    try:
+        firefox_binary = firefox_binary.resolve(strict=True)
+        geckodriver_binary = geckodriver_binary.resolve(strict=True)
+    except Exception as exc:
+        print(f"Invalid path to firefox or geckodriver executables")
+    else:
+        run_interactive_cli(firefox_binary, geckodriver_binary, page_load_time)
 
 
 if __name__ == '__main__':
