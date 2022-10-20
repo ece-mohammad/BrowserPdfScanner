@@ -34,3 +34,8 @@ Why? Usually you can download PDFs from within the browser by clicking on the do
     ```shell
     python main.py [path_to_firefox_executable] [path_to_gecko_driver_executable]
     ```
+
+
+## Note
+
+- If you're using windows, open file `run.bat`, set `FFOX_BIN` to firefox executable path,`GECKO_BIN` to geckodriver executable path and `PAGE_WAIT` to PDF page wait time. After that you can run the tool by running `run.bat` either from a command line or by double-clicking it
