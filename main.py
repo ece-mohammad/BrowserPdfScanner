@@ -8,12 +8,14 @@ import sys
 import time
 from enum import IntEnum, auto, unique
 from math import log10
+import re
 from typing import *
 
 from prompt_toolkit import HTML, PromptSession, print_formatted_text
 from prompt_toolkit.shortcuts.progress_bar import ProgressBar
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
@@ -74,21 +76,45 @@ def browser_pdf_load_form_url(driver: webdriver, url: str, timeout: int = 60) ->
 
 
 def browser_pdf_fit_page_width(driver: webdriver) -> None:
-    driver.find_element(By.ID, "scaleSelect").click()
-    driver.find_element(By.ID, "pageWidthOption").click()
+    """scale PDF page to fit window width"""
+    scale_options = driver.find_elements(By.TAG_NAME, "option")
+    if not scale_options:
+        return
+
+    for option in scale_options:
+        if option.get_attribute("value") == "page-width":
+            option.click()
+
+    # driver.find_element(By.ID, "scaleSelect").click()
+    # driver.find_element(By.ID, "pageWidthOption").click()
+
+
+def browser_pdf_fit_page_height(driver: webdriver.Firefox, pdf_properties: Dict[str, int | float]) -> None:
+    """resize browser instance's window to fit PDF page height"""
+    browser_rect: Dict[str, int | float] = driver.get_window_rect()
+    browser_rect["height"] = pdf_properties["y"] + pdf_properties["height"]
+    driver.set_window_rect(browser_rect)
+
+
+def browser_pdf_goto_start(driver: webdriver.Firefox) -> None:
+    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.HOME)
 
 
 def browser_pdf_get_properties(driver: webdriver.Firefox) -> Dict[str, str | int]:
     """Get opened PDF file properties (number of pages and page dimensions in pixels)"""
     pdf_properties: Dict[str, str | int] = dict()
+    page_count: int = 0
 
     # get document page count
-    page_count = driver.find_element(By.ID, "numPages")
-    page_count = int(page_count.text.strip().split()[-1])
+    # page_count = driver.find_element(By.ID, "numPages")
+    # page_count = int(page_count.text.strip().split()[-1])
+
+    for span in driver.find_elements(By.TAG_NAME, "span"):
+        if re.match("^of \\d", span.text):
+            page_count = int(span.text.split()[-1])
 
     # get document page dimensions
-    page_rect = driver.find_element(By.CLASS_NAME, "textLayer").rect
-
+    page_rect = driver.find_element(By.CLASS_NAME, "page").rect
     pdf_properties.update(page_rect)
     pdf_properties["page_count"] = page_count
 
@@ -104,7 +130,7 @@ def browser_pdf_scan_current_page(driver: webdriver.Firefox, save_as: pathlib.Pa
 def browser_pdf_next_page(driver: webdriver.Firefox) -> None:
     """Scroll to next page in opened PDF file"""
     try:
-        driver.find_element(By.ID, "next").click()
+        driver.find_element(By.CSS_SELECTOR, "button[title='Next Page']").click()
     except Exception as exc:
         raise ScanException(PDFScanError.PaginationError, f"Exception {exc} while moving to next page of PDF file")
 
@@ -146,7 +172,12 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
 
             # Open PDF  -----------------------------------------------------------------------------------------------
             elif session_state == SessionState.OpenPDF:
-                prompt_session.prompt("Browse to PDF file, wait for it to load then press ENTER to continue...")
+                prompt_session.prompt(
+                    "Browse to PDF file, "
+                    "wait for it to load, "
+                    "set PDF tab as first tab "
+                    "then press ENTER to continue..."
+                )
                 session_state = SessionState.DestinationDirectory
 
             # Destination Directory -----------------------------------------------------------------------------------
@@ -180,13 +211,15 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
             # Prepare PDF scan ---------------------------------------------------------------------------------------
             elif session_state == SessionState.PrepareScan:
                 try:
+                    pdf_properties = browser_pdf_get_properties(browser)
                     browser.maximize_window()
                     browser_pdf_fit_page_width(browser)
-                    pdf_properties = browser_pdf_get_properties(browser)
-                    browser.set_window_size(
-                        width=pdf_properties["width"],
-                        height=pdf_properties["height"]
-                    )
+                    browser_pdf_fit_page_height(browser, pdf_properties)
+                    browser_pdf_goto_start(browser)
+                    # browser.set_window_size(
+                    #     width=pdf_properties["width"],
+                    #     height=pdf_properties["height"]
+                    # )
                 except ScanException as scan_exc:
                     ret_code = scan_exc.code
                     session_state = SessionState.CloseSession
@@ -224,7 +257,8 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
 
             # Close session -------------------------------------------------------------------------------------------
             elif session_state == SessionState.CloseSession:
-                browser.quit()
+                if browser:
+                    browser.quit()
                 print_formatted_text("--------------------------------------------------------------------------------")
                 print_formatted_text("Done")
                 if ret_code == PDFScanError.NoError:
