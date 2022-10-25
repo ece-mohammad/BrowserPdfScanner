@@ -8,8 +8,8 @@ import sys
 import time
 from enum import IntEnum, auto, unique
 from math import log10
-import re
 from typing import *
+from urllib import parse
 
 from prompt_toolkit import HTML, PromptSession, print_formatted_text
 from prompt_toolkit.shortcuts.progress_bar import ProgressBar
@@ -75,6 +75,33 @@ def browser_pdf_load_form_url(driver: webdriver, url: str, timeout: int = 60) ->
     )
 
 
+def browser_reset_window_size(driver: webdriver.Firefox) -> None:
+    """Reset browser's window size"""
+    driver.minimize_window()
+    # time.sleep(1)
+    driver.maximize_window()
+    # time.sleep(1)
+
+
+def browser_pdf_locate_tabs(driver: webdriver.Firefox) -> Dict[str, str | Dict[int, Dict[str, str]]]:
+    """Locate PDF file's tab"""
+    pdf_tabs: Dict[int, Dict[str, str]] = dict()
+    original_tab: str = driver.current_window_handle
+
+    for tab_num, tab_handle in enumerate(driver.window_handles):
+        driver.switch_to.window(tab_handle)
+        tab_url: str = driver.current_url
+        if parse.urlparse(tab_url).path.endswith("pdf"):
+            pdf_tabs[tab_num] = {
+                "title":  driver.title,
+                "url":    driver.current_url,
+                "handle": tab_handle
+            }
+
+    driver.switch_to.window(original_tab)
+    return {"current_tab": driver.current_window_handle, "pdf_tabs": pdf_tabs}
+
+
 def browser_pdf_fit_page_width(driver: webdriver) -> None:
     """scale PDF page to fit window width"""
     scale_options = driver.find_elements(By.TAG_NAME, "option")
@@ -85,33 +112,29 @@ def browser_pdf_fit_page_width(driver: webdriver) -> None:
         if option.get_attribute("value") == "page-width":
             option.click()
 
-    # driver.find_element(By.ID, "scaleSelect").click()
-    # driver.find_element(By.ID, "pageWidthOption").click()
+    # time.sleep(1)
 
 
 def browser_pdf_fit_page_height(driver: webdriver.Firefox, pdf_properties: Dict[str, int | float]) -> None:
     """resize browser instance's window to fit PDF page height"""
     browser_rect: Dict[str, int | float] = driver.get_window_rect()
     browser_rect["height"] = pdf_properties["y"] + pdf_properties["height"]
-    driver.set_window_rect(browser_rect)
+    driver.set_window_rect(**browser_rect)
+    # time.sleep(1)
 
 
 def browser_pdf_goto_start(driver: webdriver.Firefox) -> None:
     driver.find_element(By.TAG_NAME, "body").send_keys(Keys.HOME)
+    # time.sleep(1)
 
 
 def browser_pdf_get_properties(driver: webdriver.Firefox) -> Dict[str, str | int]:
     """Get opened PDF file properties (number of pages and page dimensions in pixels)"""
     pdf_properties: Dict[str, str | int] = dict()
-    page_count: int = 0
 
     # get document page count
-    # page_count = driver.find_element(By.ID, "numPages")
-    # page_count = int(page_count.text.strip().split()[-1])
-
-    for span in driver.find_elements(By.TAG_NAME, "span"):
-        if re.match("^of \\d", span.text):
-            page_count = int(span.text.split()[-1])
+    page_count = driver.find_element(By.ID, "numPages")
+    page_count = int(page_count.text.strip().split()[-1])
 
     # get document page dimensions
     page_rect = driver.find_element(By.CLASS_NAME, "page").rect
@@ -124,7 +147,8 @@ def browser_pdf_get_properties(driver: webdriver.Firefox) -> Dict[str, str | int
 def browser_pdf_scan_current_page(driver: webdriver.Firefox, save_as: pathlib.Path) -> None:
     """Scan a single PDF page"""
     # save screenshot of current page
-    driver.save_screenshot(str(save_as))
+    # driver.save_screenshot(str(save_as))
+    driver.save_full_page_screenshot(str(save_as))
 
 
 def browser_pdf_next_page(driver: webdriver.Firefox) -> None:
@@ -178,7 +202,19 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
                     "set PDF tab as first tab "
                     "then press ENTER to continue..."
                 )
-                session_state = SessionState.DestinationDirectory
+
+                open_tabs: Dict[str, str | Dict[int, Dict[str, str]]] = browser_pdf_locate_tabs(browser)
+                pdf_tabs: Dict[int, Dict[str, str]] = open_tabs.get("pdf_tabs", {})
+
+                if len(pdf_tabs) == 0:
+                    print_formatted_text("Didn't find any open PDF files...")
+                    session_state = SessionState.OpenPDF
+
+                else:
+                    (tab_index, tab_info) = pdf_tabs.popitem()
+                    print_formatted_text(f"Found PDF file: {tab_info['title']} in tab #{tab_index + 1}")
+                    browser.switch_to.window(tab_info["handle"])
+                    session_state = SessionState.DestinationDirectory
 
             # Destination Directory -----------------------------------------------------------------------------------
             elif session_state == SessionState.DestinationDirectory:
@@ -211,16 +247,13 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
             # Prepare PDF scan ---------------------------------------------------------------------------------------
             elif session_state == SessionState.PrepareScan:
                 try:
-                    pdf_properties = browser_pdf_get_properties(browser)
-                    browser.maximize_window()
+                    browser_reset_window_size(browser)
                     browser_pdf_fit_page_width(browser)
+                    pdf_properties = browser_pdf_get_properties(browser)
                     browser_pdf_fit_page_height(browser, pdf_properties)
                     browser_pdf_goto_start(browser)
-                    # browser.set_window_size(
-                    #     width=pdf_properties["width"],
-                    #     height=pdf_properties["height"]
-                    # )
                 except ScanException as scan_exc:
+                    print(f"{scan_exc=}")
                     ret_code = scan_exc.code
                     session_state = SessionState.CloseSession
                 else:
@@ -233,13 +266,9 @@ def run_interactive_cli(firefox_binary: pathlib.Path, geckodriver_binary: pathli
                 with ProgressBar(bottom_toolbar=bottom_text) as progress_bar:
                     for page in progress_bar(range(pdf_properties["page_count"]), label="scan progress"):
                         save_as: pathlib.Path = dst_directory / f"page_{str(page).zfill(pad_size)}.png"
-                        try:
-                            browser_pdf_scan_current_page(browser, save_as)
-                            browser_pdf_next_page(browser)
-                            time.sleep(page_load_time)
-                        except Exception as exc:
-                            print_formatted_text(exc)
-                            sys.exit(-3)
+                        browser_pdf_scan_current_page(browser, save_as)
+                        browser_pdf_next_page(browser)
+                        time.sleep(page_load_time)
 
                 print_formatted_text("PDF file scanned successfully. ")
                 print_formatted_text("--------------------------------------------------------------------------------")
