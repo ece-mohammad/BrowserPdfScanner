@@ -144,3 +144,4 @@ bar
 *.zip
 .idea
 *.exe
+*.pdf
